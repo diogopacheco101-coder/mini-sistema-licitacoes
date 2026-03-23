@@ -1,167 +1,305 @@
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
+import * as XLSX from "xlsx";
+
+const STORAGE_KEY = "licitaflow_v4_dados";
+
+const licitacoesExemplo = [
+  {
+    id: "LIC-001",
+    numero: "Modelo de Teste",
+    objeto: "Protótipo inicial do sistema",
+    status: "Ativa",
+  },
+];
+
+function numero(v) {
+  if (typeof v === "number") return v;
+  if (v === null || v === undefined || v === "") return 0;
+  const textoNumero = String(v).replace(/\./g, "").replace(",", ".").trim();
+  const n = Number(textoNumero);
+  return Number.isNaN(n) ? 0 : n;
+}
+
+function texto(v) {
+  return v === null || v === undefined ? "" : String(v).trim();
+}
+
+function recalcularItem(item) {
+  const qtdLicitada = Number(item.qtdLicitada || 0);
+  const valorUnitario = Number(item.valorUnitario || 0);
+  const qtdUtilizada = Number(item.qtdUtilizada || 0);
+
+  const saldoQtd = Math.max(qtdLicitada - qtdUtilizada, 0);
+  const totalContratado = qtdLicitada * valorUnitario;
+  const valorSaldo = saldoQtd * valorUnitario;
+  const percentualSaldo = qtdLicitada > 0 ? (saldoQtd * 100) / qtdLicitada : 0;
+
+  let situacao = "OK";
+  if (saldoQtd <= 0) situacao = "ESGOTADO";
+  else if (percentualSaldo <= 15) situacao = "ALERTA";
+
+  return {
+    ...item,
+    qtdLicitada,
+    valorUnitario,
+    qtdUtilizada,
+    saldoQtd,
+    totalContratado,
+    valorSaldo,
+    percentualSaldo,
+    situacao,
+  };
+}
+
+const itensExemplo = [
+  recalcularItem({
+    id: "1",
+    licitacaoId: "LIC-001",
+    fornecedor: "CREDENCIAMENTO",
+    codigo: 1,
+    nome: "ARROZ TIPO 1",
+    unidade: "FD",
+    marca: "",
+    qtdLicitada: 100,
+    valorUnitario: 25,
+    qtdUtilizada: 10,
+  }),
+  recalcularItem({
+    id: "2",
+    licitacaoId: "LIC-001",
+    fornecedor: "CREDENCIAMENTO",
+    codigo: 2,
+    nome: "FEIJÃO CARIOCA",
+    unidade: "FD",
+    marca: "",
+    qtdLicitada: 80,
+    valorUnitario: 12,
+    qtdUtilizada: 5,
+  }),
+];
+
+function baixarArquivo(workbook, nome) {
+  XLSX.writeFile(workbook, nome);
+}
 
 export default function App() {
-  const licitacoesIniciais = [
-    {
-      id: "LIC-001",
-      numero: "Pregão 025/2026",
-      objeto: "Aquisição de medicamentos e materiais hospitalares",
-      fornecedor: "Total Med",
-      status: "Ativa",
-    },
-    {
-      id: "LIC-002",
-      numero: "Pregão 018/2026",
-      objeto: "Aquisição de materiais de expediente",
-      fornecedor: "Farma Vida",
-      status: "Ativa",
-    },
-  ];
-
-  const itensIniciais = [
-    {
-      id: 1,
-      licitacaoId: "LIC-001",
-      fornecedor: "Total Med",
-      codigo: "MED-001",
-      nome: "Dipirona 500mg",
-      unidade: "Cx",
-      qtdLicitada: 1500,
-      valorUnitario: 12.0,
-      saldoQtd: 1000,
-    },
-    {
-      id: 2,
-      licitacaoId: "LIC-001",
-      fornecedor: "Total Med",
-      codigo: "MED-002",
-      nome: "Soro 500ml",
-      unidade: "Und",
-      qtdLicitada: 600,
-      valorUnitario: 1.5,
-      saldoQtd: 300,
-    },
-    {
-      id: 3,
-      licitacaoId: "LIC-001",
-      fornecedor: "Total Med",
-      codigo: "MAT-010",
-      nome: "Luva Cirúrgica",
-      unidade: "Cx",
-      qtdLicitada: 1200,
-      valorUnitario: 3.0,
-      saldoQtd: 800,
-    },
-    {
-      id: 4,
-      licitacaoId: "LIC-002",
-      fornecedor: "Farma Vida",
-      codigo: "EXP-004",
-      nome: "Papel A4",
-      unidade: "Resma",
-      qtdLicitada: 400,
-      valorUnitario: 28.0,
-      saldoQtd: 145,
-    },
-    {
-      id: 5,
-      licitacaoId: "LIC-002",
-      fornecedor: "Farma Vida",
-      codigo: "EXP-011",
-      nome: "Caneta Azul",
-      unidade: "Cx",
-      qtdLicitada: 200,
-      valorUnitario: 39.0,
-      saldoQtd: 35,
-    },
-  ];
-
-  const movimentosIniciais = [
-    {
-      id: 1,
-      data: "23/03/2026",
-      fornecedor: "Total Med",
-      licitacao: "Pregão 025/2026",
-      item: "Dipirona 500mg",
-      quantidade: 100,
-      usuario: "Operador",
-      observacao: "Baixa inicial",
-    },
-    {
-      id: 2,
-      data: "23/03/2026",
-      fornecedor: "Farma Vida",
-      licitacao: "Pregão 018/2026",
-      item: "Papel A4",
-      quantidade: 40,
-      usuario: "Operador",
-      observacao: "NF 000123",
-    },
-  ];
+  const [carregado, setCarregado] = useState(false);
 
   const [abaAtiva, setAbaAtiva] = useState("dashboard");
-  const [licitacoes] = useState(licitacoesIniciais);
-  const [itens, setItens] = useState(itensIniciais);
-  const [movimentos, setMovimentos] = useState(movimentosIniciais);
+  const [licitacoes, setLicitacoes] = useState(licitacoesExemplo);
+  const [itens, setItens] = useState(itensExemplo);
+  const [movimentos, setMovimentos] = useState([]);
 
   const [licitacaoSelecionada, setLicitacaoSelecionada] = useState("LIC-001");
-  const [fornecedorSelecionado, setFornecedorSelecionado] = useState("Total Med");
-  const [notaFiscal, setNotaFiscal] = useState("000145");
+  const [fornecedorBaixa, setFornecedorBaixa] = useState("");
+  const [notaFiscal, setNotaFiscal] = useState("");
   const [busca, setBusca] = useState("");
   const [quantidades, setQuantidades] = useState({});
   const [mensagem, setMensagem] = useState("");
   const [nomeArquivo, setNomeArquivo] = useState("");
-  const [filtroFornecedor, setFiltroFornecedor] = useState("Todos");
+  const [filtroHistoricoFornecedor, setFiltroHistoricoFornecedor] = useState("Todos");
+
+  useEffect(() => {
+    const salvo = localStorage.getItem(STORAGE_KEY);
+    if (salvo) {
+      try {
+        const dados = JSON.parse(salvo);
+        if (dados.licitacoes?.length) setLicitacoes(dados.licitacoes);
+        if (dados.itens?.length) setItens(dados.itens.map(recalcularItem));
+        if (dados.movimentos) setMovimentos(dados.movimentos);
+        if (typeof dados.licitacaoSelecionada === "string") {
+          setLicitacaoSelecionada(dados.licitacaoSelecionada);
+        }
+        if (typeof dados.fornecedorBaixa === "string") {
+          setFornecedorBaixa(dados.fornecedorBaixa);
+        }
+        if (typeof dados.nomeArquivo === "string") {
+          setNomeArquivo(dados.nomeArquivo);
+        }
+      } catch (e) {
+        console.error("Erro ao carregar dados locais", e);
+      }
+    }
+    setCarregado(true);
+  }, []);
+
+  useEffect(() => {
+    if (!carregado) return;
+
+    localStorage.setItem(
+      STORAGE_KEY,
+      JSON.stringify({
+        licitacoes,
+        itens,
+        movimentos,
+        licitacaoSelecionada,
+        fornecedorBaixa,
+        nomeArquivo,
+      })
+    );
+  }, [
+    carregado,
+    licitacoes,
+    itens,
+    movimentos,
+    licitacaoSelecionada,
+    fornecedorBaixa,
+    nomeArquivo,
+  ]);
 
   const formatarMoeda = (valor) =>
     new Intl.NumberFormat("pt-BR", {
       style: "currency",
       currency: "BRL",
-    }).format(valor);
+    }).format(Number(valor || 0));
 
-  const fornecedores = useMemo(() => {
-    return [...new Set(itens.map((item) => item.fornecedor))];
-  }, [itens]);
-
-  const licitacaoAtual = licitacoes.find(
-    (licitacao) => licitacao.id === licitacaoSelecionada
-  );
+  const licitacaoAtual = licitacoes.find((licitacao) => licitacao.id === licitacaoSelecionada);
 
   const itensFiltrados = useMemo(() => {
     return itens.filter((item) => {
       const bateLicitacao = item.licitacaoId === licitacaoSelecionada;
-      const bateFornecedor = item.fornecedor === fornecedorSelecionado;
       const termo = busca.toLowerCase();
       const bateBusca =
         item.nome.toLowerCase().includes(termo) ||
-        item.codigo.toLowerCase().includes(termo);
+        String(item.codigo).toLowerCase().includes(termo);
 
-      return bateLicitacao && bateFornecedor && bateBusca;
+      return bateLicitacao && bateBusca;
     });
-  }, [itens, licitacaoSelecionada, fornecedorSelecionado, busca]);
-
-  const itensRelatorio = useMemo(() => {
-    if (filtroFornecedor === "Todos") return itens;
-    return itens.filter((item) => item.fornecedor === filtroFornecedor);
-  }, [itens, filtroFornecedor]);
+  }, [itens, licitacaoSelecionada, busca]);
 
   const totalLicitado = itens.reduce(
-    (soma, item) => soma + item.qtdLicitada * item.valorUnitario,
+    (soma, item) => soma + Number(item.totalContratado || 0),
     0
   );
 
   const totalSaldo = itens.reduce(
-    (soma, item) => soma + item.saldoQtd * item.valorUnitario,
+    (soma, item) => soma + Number(item.valorSaldo || 0),
     0
   );
 
   const totalUtilizado = totalLicitado - totalSaldo;
 
   const itensComAlerta = itens.filter(
-    (item) => item.saldoQtd <= Math.max(30, item.qtdLicitada * 0.15)
+    (item) => Number(item.saldoQtd || 0) <= Math.max(30, Number(item.qtdLicitada || 0) * 0.15)
   );
 
+  const fornecedoresHistorico = useMemo(() => {
+    return [...new Set(movimentos.map((mov) => mov.fornecedor).filter(Boolean))];
+  }, [movimentos]);
+
+  const movimentosFiltrados = useMemo(() => {
+    if (filtroHistoricoFornecedor === "Todos") return movimentos;
+    return movimentos.filter((mov) => mov.fornecedor === filtroHistoricoFornecedor);
+  }, [movimentos, filtroHistoricoFornecedor]);
+
+  async function importarPlanilha(event) {
+    const arquivo = event.target.files?.[0];
+    if (!arquivo) return;
+
+    try {
+      setMensagem("Lendo planilha...");
+      setNomeArquivo(arquivo.name);
+      setMovimentos([]);
+      setQuantidades({});
+      setNotaFiscal("");
+      setBusca("");
+      setFornecedorBaixa("");
+      setFiltroHistoricoFornecedor("Todos");
+
+      const buffer = await arquivo.arrayBuffer();
+      const workbook = XLSX.read(buffer, { type: "array" });
+      const nomeAba = workbook.SheetNames[0];
+      const worksheet = workbook.Sheets[nomeAba];
+
+      const linhas = XLSX.utils.sheet_to_json(worksheet, {
+        header: 1,
+        raw: true,
+        defval: "",
+      });
+
+      const indiceCabecalho = linhas.findIndex((linha) => {
+        const a = texto(linha[0]).toUpperCase();
+        const b = texto(linha[1]).toUpperCase();
+        const c = texto(linha[2]).toUpperCase();
+        return a.includes("ÍTEM") && b.includes("FORNECEDOR") && c.includes("DESCRIÇÃO");
+      });
+
+      if (indiceCabecalho === -1) {
+        setMensagem("Não encontrei a tabela principal da planilha.");
+        event.target.value = "";
+        return;
+      }
+
+      const linhasDados = linhas.slice(indiceCabecalho + 1);
+      const idLicitacao = `LIC-${Date.now()}`;
+      const descricaoTopo = texto(linhas[2]?.[0]) || `Importado de ${arquivo.name}`;
+
+      const itensImportados = linhasDados
+        .map((linha, index) => {
+          const codigo = linha[0];
+          const nome = texto(linha[2]);
+          const unidade = texto(linha[3]);
+          const qtdLicitada = numero(linha[4]);
+          const valorUnitario = numero(linha[5]);
+          const marca = texto(linha[6]);
+          const qtdUtilizada = numero(linha[10]);
+
+          if (!codigo && !nome) return null;
+          if (!nome) return null;
+          if (!qtdLicitada && !valorUnitario) return null;
+
+          return recalcularItem({
+            id: `${Date.now()}-${index}`,
+            licitacaoId: idLicitacao,
+            fornecedor: "CREDENCIAMENTO",
+            codigo: codigo || index + 1,
+            nome,
+            unidade,
+            marca,
+            qtdLicitada,
+            valorUnitario,
+            qtdUtilizada,
+          });
+        })
+        .filter(Boolean);
+
+      if (!itensImportados.length) {
+        setMensagem("A planilha foi lida, mas nenhum item válido foi encontrado.");
+        event.target.value = "";
+        return;
+      }
+
+      const novaLicitacao = {
+        id: idLicitacao,
+        numero: arquivo.name.replace(/\.[^.]+$/, ""),
+        objeto: descricaoTopo,
+        status: "Importada",
+      };
+
+      setLicitacoes([novaLicitacao]);
+      setItens(itensImportados);
+      setMovimentos([]);
+      setLicitacaoSelecionada(idLicitacao);
+      setFornecedorBaixa("");
+      setQuantidades({});
+      setBusca("");
+      setFiltroHistoricoFornecedor("Todos");
+      setMensagem(`Planilha importada com sucesso. ${itensImportados.length} itens carregados.`);
+      setAbaAtiva("baixa");
+      event.target.value = "";
+    } catch (erro) {
+      console.error(erro);
+      setMensagem("Erro ao importar a planilha.");
+      event.target.value = "";
+    }
+  }
+
   function confirmarBaixa() {
+    if (!fornecedorBaixa.trim()) {
+      setMensagem("Informe o fornecedor da baixa.");
+      return;
+    }
+
     const selecionados = itensFiltrados.filter(
       (item) => Number(quantidades[item.id] || 0) > 0
     );
@@ -172,13 +310,11 @@ export default function App() {
     }
 
     const invalido = selecionados.find(
-      (item) => Number(quantidades[item.id]) > item.saldoQtd
+      (item) => Number(quantidades[item.id]) > Number(item.saldoQtd || 0)
     );
 
     if (invalido) {
-      setMensagem(
-        `A quantidade informada para "${invalido.nome}" é maior que o saldo disponível.`
-      );
+      setMensagem(`A quantidade informada para "${invalido.nome}" é maior que o saldo disponível.`);
       return;
     }
 
@@ -189,28 +325,112 @@ export default function App() {
         const qtd = Number(quantidades[item.id] || 0);
         if (!qtd) return item;
 
-        return {
+        return recalcularItem({
           ...item,
-          saldoQtd: item.saldoQtd - qtd,
-        };
+          qtdUtilizada: Number(item.qtdUtilizada || 0) + qtd,
+        });
       })
     );
 
     const novosMovimentos = selecionados.map((item, index) => ({
-      id: movimentos.length + index + 1,
+      id: `${Date.now()}-${index}`,
       data: dataHoje,
-      fornecedor: fornecedorSelecionado,
+      fornecedor: fornecedorBaixa,
       licitacao: licitacaoAtual ? licitacaoAtual.numero : "",
+      codigo: item.codigo,
       item: item.nome,
       quantidade: Number(quantidades[item.id]),
+      valorUnitario: Number(item.valorUnitario || 0),
+      valorTotal: Number(quantidades[item.id]) * Number(item.valorUnitario || 0),
       usuario: "Operador",
-      observacao: `NF ${notaFiscal}`,
+      observacao: notaFiscal ? `NF ${notaFiscal}` : "Baixa manual",
     }));
 
     setMovimentos((listaAtual) => [...novosMovimentos.reverse(), ...listaAtual]);
     setQuantidades({});
     setMensagem("Baixa em lote realizada com sucesso.");
     setAbaAtiva("historico");
+  }
+
+  function exportarSaldoAtualizado() {
+    const dados = itens.map((item) => ({
+      "ÍTEM": item.codigo,
+      "FORNECEDOR": "CREDENCIAMENTO",
+      "DESCRIÇÃO DO PRODUTO": item.nome,
+      "APRESENT": item.unidade,
+      "QT": item.qtdLicitada,
+      "P. FINAL": item.valorUnitario,
+      "MARCA": item.marca,
+      "TOTAL": item.totalContratado,
+      "SALDO": item.saldoQtd,
+      "VALOR": item.valorSaldo,
+      "QTD UT": item.qtdUtilizada,
+      "%": Number(item.percentualSaldo.toFixed(2)),
+      "SIT": item.situacao,
+    }));
+
+    const ws = XLSX.utils.json_to_sheet(dados);
+    const wb = XLSX.utils.book_new();
+    XLSX.utils.book_append_sheet(wb, ws, "Saldo Atualizado");
+    baixarArquivo(wb, "saldo-atualizado.xlsx");
+  }
+
+  function exportarHistorico() {
+    const dados = movimentos.map((mov) => ({
+      Data: mov.data,
+      Fornecedor: mov.fornecedor,
+      Licitação: mov.licitacao,
+      Código: mov.codigo,
+      Item: mov.item,
+      Quantidade: mov.quantidade,
+      "Valor Unitário": mov.valorUnitario,
+      "Valor Total": mov.valorTotal,
+      Usuário: mov.usuario,
+      Observação: mov.observacao,
+    }));
+
+    const ws = XLSX.utils.json_to_sheet(dados);
+    const wb = XLSX.utils.book_new();
+    XLSX.utils.book_append_sheet(wb, ws, "Historico");
+    baixarArquivo(wb, "historico-baixas.xlsx");
+  }
+
+  function limparBaseAtual() {
+    const confirmar = window.confirm(
+      "Isso vai apagar a planilha importada, o histórico e os saldos salvos neste navegador. Deseja continuar?"
+    );
+
+    if (!confirmar) return;
+
+    setLicitacoes([]);
+    setItens([]);
+    setMovimentos([]);
+    setLicitacaoSelecionada("");
+    setFornecedorBaixa("");
+    setNotaFiscal("");
+    setBusca("");
+    setQuantidades({});
+    setNomeArquivo("");
+    setFiltroHistoricoFornecedor("Todos");
+    localStorage.removeItem(STORAGE_KEY);
+    setMensagem("Base atual removida com sucesso.");
+    setAbaAtiva("importacao");
+  }
+
+  function restaurarModelo() {
+    setLicitacoes(licitacoesExemplo);
+    setItens(itensExemplo);
+    setMovimentos([]);
+    setLicitacaoSelecionada("LIC-001");
+    setFornecedorBaixa("");
+    setNotaFiscal("");
+    setBusca("");
+    setQuantidades({});
+    setNomeArquivo("");
+    setFiltroHistoricoFornecedor("Todos");
+    setMensagem("Modelo de teste restaurado.");
+    localStorage.removeItem(STORAGE_KEY);
+    setAbaAtiva("dashboard");
   }
 
   const estilos = {
@@ -241,7 +461,7 @@ export default function App() {
     subtitulo: {
       fontSize: "14px",
       color: "#6b7280",
-      marginBottom: "30px",
+      marginBottom: "18px",
     },
     menuBotao: {
       width: "100%",
@@ -402,6 +622,12 @@ export default function App() {
       fontSize: "14px",
       lineHeight: 1.5,
     },
+    barraAcoes: {
+      display: "flex",
+      gap: "10px",
+      flexWrap: "wrap",
+      marginTop: "14px",
+    },
   };
 
   return (
@@ -409,7 +635,7 @@ export default function App() {
       <div style={estilos.layout}>
         <aside style={estilos.sidebar}>
           <div style={estilos.logo}>LicitaFlow</div>
-          <div style={estilos.subtitulo}>Mini sistema web para teste</div>
+          <div style={estilos.subtitulo}>Baixa rápida com credenciamento</div>
 
           <button
             style={{
@@ -462,10 +688,19 @@ export default function App() {
           </button>
 
           <div style={estilos.caixaAlerta}>
-            <strong>Objetivo do MVP:</strong>
+            <strong>Foco atual:</strong>
             <br />
-            testar baixa em lote, saldos, histórico e relatórios sem depender
-            de Excel manual.
+            importar a planilha real, localizar item rápido, informar o fornecedor da entrega e dar baixa em lote.
+          </div>
+
+          <div style={estilos.barraAcoes}>
+            <button style={estilos.botaoSecundario} onClick={restaurarModelo}>
+              Restaurar modelo
+            </button>
+
+            <button style={estilos.botaoSecundario} onClick={limparBaseAtual}>
+              Limpar base atual
+            </button>
           </div>
         </aside>
 
@@ -474,7 +709,9 @@ export default function App() {
             <div>
               <h1 style={estilos.titulo}>Sistema de controle de licitação</h1>
               <div style={{ color: "#6b7280", marginTop: "6px" }}>
-                Protótipo web navegável para validar fluxo e interface.
+                {nomeArquivo
+                  ? `Planilha ativa: ${nomeArquivo}`
+                  : "Protótipo funcional com importação real."}
               </div>
             </div>
             <div style={estilos.badge}>Ambiente de teste</div>
@@ -489,14 +726,17 @@ export default function App() {
                   <div style={estilos.cardTitulo}>Total licitado</div>
                   <div style={estilos.cardValor}>{formatarMoeda(totalLicitado)}</div>
                 </div>
+
                 <div style={estilos.card}>
                   <div style={estilos.cardTitulo}>Total utilizado</div>
                   <div style={estilos.cardValor}>{formatarMoeda(totalUtilizado)}</div>
                 </div>
+
                 <div style={estilos.card}>
                   <div style={estilos.cardTitulo}>Saldo atual</div>
                   <div style={estilos.cardValor}>{formatarMoeda(totalSaldo)}</div>
                 </div>
+
                 <div style={estilos.card}>
                   <div style={estilos.cardTitulo}>Itens em alerta</div>
                   <div style={estilos.cardValor}>{itensComAlerta.length}</div>
@@ -506,27 +746,43 @@ export default function App() {
               <div style={estilos.grid2}>
                 <div style={estilos.card}>
                   <h3 style={{ marginTop: 0 }}>Licitações ativas</h3>
+
                   <div style={estilos.tabelaWrap}>
                     <table style={estilos.tabela}>
                       <thead>
                         <tr>
                           <th style={estilos.th}>Número</th>
                           <th style={estilos.th}>Objeto</th>
-                          <th style={estilos.th}>Fornecedor</th>
                           <th style={estilos.th}>Status</th>
                         </tr>
                       </thead>
                       <tbody>
-                        {licitacoes.map((licitacao) => (
-                          <tr key={licitacao.id}>
-                            <td style={estilos.td}>{licitacao.numero}</td>
-                            <td style={estilos.td}>{licitacao.objeto}</td>
-                            <td style={estilos.td}>{licitacao.fornecedor}</td>
-                            <td style={estilos.td}>{licitacao.status}</td>
+                        {licitacoes.length === 0 ? (
+                          <tr>
+                            <td style={estilos.td} colSpan="3">
+                              Nenhuma base carregada.
+                            </td>
                           </tr>
-                        ))}
+                        ) : (
+                          licitacoes.map((licitacao) => (
+                            <tr key={licitacao.id}>
+                              <td style={estilos.td}>{licitacao.numero}</td>
+                              <td style={estilos.td}>{licitacao.objeto}</td>
+                              <td style={estilos.td}>{licitacao.status}</td>
+                            </tr>
+                          ))
+                        )}
                       </tbody>
                     </table>
+                  </div>
+
+                  <div style={estilos.barraAcoes}>
+                    <button style={estilos.botaoSecundario} onClick={exportarSaldoAtualizado}>
+                      Exportar saldo
+                    </button>
+                    <button style={estilos.botaoSecundario} onClick={exportarHistorico}>
+                      Exportar histórico
+                    </button>
                   </div>
                 </div>
 
@@ -535,7 +791,7 @@ export default function App() {
                   {itensComAlerta.length === 0 ? (
                     <div>Nenhum alerta no momento.</div>
                   ) : (
-                    itensComAlerta.map((item) => (
+                    itensComAlerta.slice(0, 8).map((item) => (
                       <div
                         key={item.id}
                         style={{
@@ -547,7 +803,7 @@ export default function App() {
                       >
                         <strong>{item.nome}</strong>
                         <div style={{ color: "#6b7280", marginTop: "4px" }}>
-                          {item.fornecedor}
+                          Código: {item.codigo}
                         </div>
                         <div style={{ marginTop: "4px" }}>
                           Saldo: {item.saldoQtd} {item.unidade}
@@ -575,80 +831,33 @@ export default function App() {
                   }}
                 >
                   <div style={{ fontWeight: "bold", marginBottom: "8px" }}>
-                    Selecione a planilha da licitação
+                    Selecione a planilha real do setor
                   </div>
+
                   <div style={{ color: "#6b7280", marginBottom: "15px" }}>
-                    Arquivos .xlsx ou .xls
+                    O sistema vai ler a tabela principal da aba.
                   </div>
-                  <input
-                    type="file"
-                    onChange={(e) =>
-                      setNomeArquivo(
-                        e.target.files && e.target.files[0]
-                          ? e.target.files[0].name
-                          : ""
-                      )
-                    }
-                  />
+
+                  <input type="file" accept=".xlsx,.xls" onChange={importarPlanilha} />
+
                   <div style={{ marginTop: "15px", color: "#2563eb" }}>
                     {nomeArquivo ? `Arquivo selecionado: ${nomeArquivo}` : ""}
                   </div>
                 </div>
 
-                <div style={estilos.formularioGrid}>
-                  <div>
-                    <label style={estilos.label}>Número da licitação</label>
-                    <input
-                      style={estilos.input}
-                      placeholder="Ex.: Pregão 025/2026"
-                    />
-                  </div>
-
-                  <div>
-                    <label style={estilos.label}>Fornecedor principal</label>
-                    <input style={estilos.input} placeholder="Ex.: Total Med" />
-                  </div>
-
-                  <div>
-                    <label style={estilos.label}>Coluna do item</label>
-                    <input
-                      style={estilos.input}
-                      placeholder="Descrição do item"
-                    />
-                  </div>
-
-                  <div>
-                    <label style={estilos.label}>Coluna do saldo</label>
-                    <input
-                      style={estilos.input}
-                      placeholder="Saldo disponível"
-                    />
-                  </div>
+                <div style={estilos.caixaAlerta}>
+                  Essa versão lê a tabela principal com colunas como:
+                  <br />
+                  ÍTEM, FORNECEDOR, DESCRIÇÃO, APRESENT, QT, P. FINAL, SALDO, VALOR, QTD UT e SIT.
                 </div>
-
-                <button
-                  style={estilos.botaoPrimario}
-                  onClick={() =>
-                    setMensagem(
-                      nomeArquivo
-                        ? `Planilha "${nomeArquivo}" pronta para mapeamento.`
-                        : "Selecione um arquivo para validar."
-                    )
-                  }
-                >
-                  Validar arquivo
-                </button>
               </div>
 
               <div style={estilos.card}>
-                <h3 style={{ marginTop: 0 }}>Como funcionaria</h3>
-                <p>1. Você envia a planilha real do setor.</p>
-                <p>2. O sistema identifica e mapeia as colunas.</p>
-                <p>3. Os itens entram na base da licitação.</p>
-                <p>
-                  4. Depois disso, as baixas passam a ser lançadas no sistema,
-                  não mais na planilha manual.
-                </p>
+                <h3 style={{ marginTop: 0 }}>Como está funcionando agora</h3>
+                <p>1. O item pertence ao credenciamento, não a um fornecedor específico.</p>
+                <p>2. O fornecedor é informado na hora da baixa.</p>
+                <p>3. O histórico registra quem forneceu cada movimentação.</p>
+                <p>4. O saldo do item continua único e centralizado.</p>
               </div>
             </div>
           )}
@@ -664,7 +873,10 @@ export default function App() {
                     <select
                       style={estilos.input}
                       value={licitacaoSelecionada}
-                      onChange={(e) => setLicitacaoSelecionada(e.target.value)}
+                      onChange={(e) => {
+                        setLicitacaoSelecionada(e.target.value);
+                        setFornecedorBaixa("");
+                      }}
                     >
                       {licitacoes.map((licitacao) => (
                         <option key={licitacao.id} value={licitacao.id}>
@@ -675,18 +887,13 @@ export default function App() {
                   </div>
 
                   <div>
-                    <label style={estilos.label}>Fornecedor</label>
-                    <select
+                    <label style={estilos.label}>Fornecedor da baixa</label>
+                    <input
                       style={estilos.input}
-                      value={fornecedorSelecionado}
-                      onChange={(e) => setFornecedorSelecionado(e.target.value)}
-                    >
-                      {fornecedores.map((fornecedor) => (
-                        <option key={fornecedor} value={fornecedor}>
-                          {fornecedor}
-                        </option>
-                      ))}
-                    </select>
+                      value={fornecedorBaixa}
+                      onChange={(e) => setFornecedorBaixa(e.target.value)}
+                      placeholder="Digite o fornecedor da NF/entrega"
+                    />
                   </div>
 
                   <div>
@@ -695,6 +902,7 @@ export default function App() {
                       style={estilos.input}
                       value={notaFiscal}
                       onChange={(e) => setNotaFiscal(e.target.value)}
+                      placeholder="Ex.: 12345"
                     />
                   </div>
 
@@ -713,49 +921,60 @@ export default function App() {
               <div style={{ ...estilos.gridBaixa, marginTop: "20px" }}>
                 <div style={estilos.card}>
                   <h3 style={{ marginTop: 0 }}>Itens disponíveis para baixa</h3>
+
                   <div style={estilos.tabelaWrap}>
                     <table style={estilos.tabela}>
                       <thead>
                         <tr>
                           <th style={estilos.th}>Código</th>
                           <th style={estilos.th}>Item</th>
+                          <th style={estilos.th}>QT</th>
+                          <th style={estilos.th}>QTD UT</th>
                           <th style={estilos.th}>Saldo</th>
-                          <th style={estilos.th}>Valor unitário</th>
+                          <th style={estilos.th}>Valor unit.</th>
                           <th style={estilos.th}>Qtd. a baixar</th>
                         </tr>
                       </thead>
                       <tbody>
-                        {itensFiltrados.map((item) => (
-                          <tr key={item.id}>
-                            <td style={estilos.td}>{item.codigo}</td>
-                            <td style={estilos.td}>
-                              <strong>{item.nome}</strong>
-                              <br />
-                              <span style={{ color: "#6b7280" }}>
-                                {item.unidade}
-                              </span>
-                            </td>
-                            <td style={estilos.td}>{item.saldoQtd}</td>
-                            <td style={estilos.td}>
-                              {formatarMoeda(item.valorUnitario)}
-                            </td>
-                            <td style={estilos.td}>
-                              <input
-                                style={estilos.input}
-                                type="number"
-                                min="0"
-                                max={item.saldoQtd}
-                                value={quantidades[item.id] || ""}
-                                onChange={(e) =>
-                                  setQuantidades((atual) => ({
-                                    ...atual,
-                                    [item.id]: e.target.value,
-                                  }))
-                                }
-                              />
+                        {itensFiltrados.length === 0 ? (
+                          <tr>
+                            <td style={estilos.td} colSpan="7">
+                              Nenhum item encontrado para essa busca/licitação.
                             </td>
                           </tr>
-                        ))}
+                        ) : (
+                          itensFiltrados.map((item) => (
+                            <tr key={item.id}>
+                              <td style={estilos.td}>{item.codigo}</td>
+                              <td style={estilos.td}>
+                                <strong>{item.nome}</strong>
+                                <br />
+                                <span style={{ color: "#6b7280" }}>
+                                  {item.unidade} {item.marca ? `| ${item.marca}` : ""}
+                                </span>
+                              </td>
+                              <td style={estilos.td}>{item.qtdLicitada}</td>
+                              <td style={estilos.td}>{item.qtdUtilizada}</td>
+                              <td style={estilos.td}>{item.saldoQtd}</td>
+                              <td style={estilos.td}>{formatarMoeda(item.valorUnitario)}</td>
+                              <td style={estilos.td}>
+                                <input
+                                  style={estilos.input}
+                                  type="number"
+                                  min="0"
+                                  max={item.saldoQtd}
+                                  value={quantidades[item.id] || ""}
+                                  onChange={(e) =>
+                                    setQuantidades((atual) => ({
+                                      ...atual,
+                                      [item.id]: e.target.value,
+                                    }))
+                                  }
+                                />
+                              </td>
+                            </tr>
+                          ))
+                        )}
                       </tbody>
                     </table>
                   </div>
@@ -800,8 +1019,7 @@ export default function App() {
                         itensFiltrados.reduce((soma, item) => {
                           return (
                             soma +
-                            Number(quantidades[item.id] || 0) *
-                              item.valorUnitario
+                            Number(quantidades[item.id] || 0) * Number(item.valorUnitario || 0)
                           );
                         }, 0)
                       )}
@@ -818,8 +1036,7 @@ export default function App() {
                       lineHeight: 1.5,
                     }}
                   >
-                    Ao confirmar, o saldo será recalculado automaticamente e o
-                    histórico ficará registrado com NF, data e usuário.
+                    O fornecedor digitado aqui será salvo no histórico da baixa. O saldo continua sendo do item, porque é credenciamento.
                   </div>
 
                   <button style={estilos.botaoPrimario} onClick={confirmarBaixa}>
@@ -833,6 +1050,26 @@ export default function App() {
           {abaAtiva === "historico" && (
             <div style={estilos.card}>
               <h3 style={{ marginTop: 0 }}>Histórico de movimentações</h3>
+
+              <div style={estilos.barraAcoes}>
+                <select
+                  style={{ ...estilos.input, maxWidth: "260px" }}
+                  value={filtroHistoricoFornecedor}
+                  onChange={(e) => setFiltroHistoricoFornecedor(e.target.value)}
+                >
+                  <option value="Todos">Todos os fornecedores</option>
+                  {fornecedoresHistorico.map((fornecedor) => (
+                    <option key={fornecedor} value={fornecedor}>
+                      {fornecedor}
+                    </option>
+                  ))}
+                </select>
+
+                <button style={estilos.botaoSecundario} onClick={exportarHistorico}>
+                  Exportar histórico
+                </button>
+              </div>
+
               <div style={estilos.tabelaWrap}>
                 <table style={estilos.tabela}>
                   <thead>
@@ -840,24 +1077,36 @@ export default function App() {
                       <th style={estilos.th}>Data</th>
                       <th style={estilos.th}>Fornecedor</th>
                       <th style={estilos.th}>Licitação</th>
+                      <th style={estilos.th}>Código</th>
                       <th style={estilos.th}>Item</th>
                       <th style={estilos.th}>Quantidade</th>
+                      <th style={estilos.th}>Valor total</th>
                       <th style={estilos.th}>Usuário</th>
                       <th style={estilos.th}>Observação</th>
                     </tr>
                   </thead>
                   <tbody>
-                    {movimentos.map((mov) => (
-                      <tr key={mov.id}>
-                        <td style={estilos.td}>{mov.data}</td>
-                        <td style={estilos.td}>{mov.fornecedor}</td>
-                        <td style={estilos.td}>{mov.licitacao}</td>
-                        <td style={estilos.td}>{mov.item}</td>
-                        <td style={estilos.td}>{mov.quantidade}</td>
-                        <td style={estilos.td}>{mov.usuario}</td>
-                        <td style={estilos.td}>{mov.observacao}</td>
+                    {movimentosFiltrados.length === 0 ? (
+                      <tr>
+                        <td style={estilos.td} colSpan="9">
+                          Nenhuma baixa registrada ainda.
+                        </td>
                       </tr>
-                    ))}
+                    ) : (
+                      movimentosFiltrados.map((mov) => (
+                        <tr key={mov.id}>
+                          <td style={estilos.td}>{mov.data}</td>
+                          <td style={estilos.td}>{mov.fornecedor}</td>
+                          <td style={estilos.td}>{mov.licitacao}</td>
+                          <td style={estilos.td}>{mov.codigo}</td>
+                          <td style={estilos.td}>{mov.item}</td>
+                          <td style={estilos.td}>{mov.quantidade}</td>
+                          <td style={estilos.td}>{formatarMoeda(mov.valorTotal)}</td>
+                          <td style={estilos.td}>{mov.usuario}</td>
+                          <td style={estilos.td}>{mov.observacao}</td>
+                        </tr>
+                      ))
+                    )}
                   </tbody>
                 </table>
               </div>
@@ -867,63 +1116,59 @@ export default function App() {
           {abaAtiva === "relatorios" && (
             <div style={estilos.grid2}>
               <div style={estilos.card}>
-                <h3 style={{ marginTop: 0 }}>Filtros de relatório</h3>
+                <h3 style={{ marginTop: 0 }}>Exportação</h3>
 
-                <div style={{ marginBottom: "14px" }}>
-                  <label style={estilos.label}>Fornecedor</label>
-                  <select
-                    style={estilos.input}
-                    value={filtroFornecedor}
-                    onChange={(e) => setFiltroFornecedor(e.target.value)}
-                  >
-                    <option value="Todos">Todos</option>
-                    {fornecedores.map((fornecedor) => (
-                      <option key={fornecedor} value={fornecedor}>
-                        {fornecedor}
-                      </option>
-                    ))}
-                  </select>
+                <div style={estilos.barraAcoes}>
+                  <button style={estilos.botaoSecundario} onClick={exportarSaldoAtualizado}>
+                    Exportar saldo atualizado
+                  </button>
+
+                  <button style={estilos.botaoSecundario} onClick={exportarHistorico}>
+                    Exportar histórico
+                  </button>
                 </div>
 
-                <div style={{ marginBottom: "14px" }}>
-                  <label style={estilos.label}>Período</label>
-                  <input style={estilos.input} placeholder="Ex.: março/2026" />
-                </div>
-
-                <div style={{ display: "flex", gap: "10px", flexWrap: "wrap" }}>
-                  <button style={estilos.botaoSecundario}>Gerar</button>
-                  <button style={estilos.botaoSecundario}>Excel</button>
-                  <button style={estilos.botaoSecundario}>PDF</button>
+                <div style={estilos.caixaAlerta}>
+                  No credenciamento, o saldo é centralizado por item. O fornecedor fica registrado em cada baixa no histórico.
                 </div>
               </div>
 
               <div style={estilos.card}>
                 <h3 style={{ marginTop: 0 }}>Saldo por item</h3>
+
                 <div style={estilos.tabelaWrap}>
                   <table style={estilos.tabela}>
                     <thead>
                       <tr>
-                        <th style={estilos.th}>Fornecedor</th>
                         <th style={estilos.th}>Código</th>
                         <th style={estilos.th}>Item</th>
-                        <th style={estilos.th}>Qtd. licitada</th>
+                        <th style={estilos.th}>QT</th>
+                        <th style={estilos.th}>QTD UT</th>
                         <th style={estilos.th}>Saldo</th>
                         <th style={estilos.th}>Saldo financeiro</th>
+                        <th style={estilos.th}>SIT</th>
                       </tr>
                     </thead>
                     <tbody>
-                      {itensRelatorio.map((item) => (
-                        <tr key={item.id}>
-                          <td style={estilos.td}>{item.fornecedor}</td>
-                          <td style={estilos.td}>{item.codigo}</td>
-                          <td style={estilos.td}>{item.nome}</td>
-                          <td style={estilos.td}>{item.qtdLicitada}</td>
-                          <td style={estilos.td}>{item.saldoQtd}</td>
-                          <td style={estilos.td}>
-                            {formatarMoeda(item.saldoQtd * item.valorUnitario)}
+                      {itens.length === 0 ? (
+                        <tr>
+                          <td style={estilos.td} colSpan="7">
+                            Nenhum item carregado.
                           </td>
                         </tr>
-                      ))}
+                      ) : (
+                        itens.map((item) => (
+                          <tr key={item.id}>
+                            <td style={estilos.td}>{item.codigo}</td>
+                            <td style={estilos.td}>{item.nome}</td>
+                            <td style={estilos.td}>{item.qtdLicitada}</td>
+                            <td style={estilos.td}>{item.qtdUtilizada}</td>
+                            <td style={estilos.td}>{item.saldoQtd}</td>
+                            <td style={estilos.td}>{formatarMoeda(item.valorSaldo)}</td>
+                            <td style={estilos.td}>{item.situacao}</td>
+                          </tr>
+                        ))
+                      )}
                     </tbody>
                   </table>
                 </div>
